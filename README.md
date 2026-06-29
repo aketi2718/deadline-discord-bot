@@ -7,6 +7,7 @@
 - `/add` で課題・テストをフォーム登録
 - 通知タイミングを選択
 - `/list` で一覧表示
+- `/edit` で編集
 - `/done` で完了
 - `/delete` で削除
 - 期限前にDiscordへ自動通知
@@ -77,8 +78,15 @@ Discordで以下を入力します。
 ```text
 /add
 /list
+/edit
 /done
 /delete
+```
+
+編集するときは、先に `/list` でIDを確認してから使います。
+
+```text
+/edit id:1
 ```
 
 期限は以下の形式で入力できます。

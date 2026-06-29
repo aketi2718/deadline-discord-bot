@@ -16,6 +16,19 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
+REMINDER_LABELS = {
+    "40320": "4週間前",
+    "20160": "2週間前",
+    "10080": "1週間前",
+    "4320": "3日前",
+    "1440": "1日前",
+    "180": "3時間前",
+}
+
+REMINDER_VALUES_BY_LABEL = {
+    label: value for value, label in REMINDER_LABELS.items()
+}
+
 
 def parse_due(text: str) -> datetime:
     text = text.strip()
@@ -32,6 +45,33 @@ def parse_due(text: str) -> datetime:
 
 def format_dt(dt: datetime) -> str:
     return dt.astimezone(JST).strftime("%Y-%m-%d %H:%M")
+
+
+async def replace_notifications(db, deadline_id, due_dt, reminder_values):
+    await db.execute(
+        """
+        DELETE FROM deadline_notifications
+        WHERE deadline_id = ?
+        """,
+        (deadline_id,)
+    )
+
+    for value in reminder_values:
+        minutes = int(value)
+        notify_at = due_dt - timedelta(minutes=minutes)
+
+        await db.execute(
+            """
+            INSERT INTO deadline_notifications
+            (deadline_id, label, notify_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                deadline_id,
+                REMINDER_LABELS[value],
+                notify_at.isoformat(),
+            )
+        )
 
 
 async def init_db():
@@ -124,6 +164,100 @@ class DeadlineModal(discord.ui.Modal, title="課題・テストを登録"):
         )
 
 
+class EditDeadlineModal(discord.ui.Modal, title="課題・テストを編集"):
+    task_title = discord.ui.TextInput(
+        label="課題名・テスト名",
+        placeholder="例: 化学レポート",
+        max_length=100
+    )
+
+    due = discord.ui.TextInput(
+        label="期限",
+        placeholder="例: 2026-07-10 23:59",
+        max_length=30
+    )
+
+    subject = discord.ui.TextInput(
+        label="科目",
+        placeholder="例: 有機化学",
+        required=False,
+        max_length=50
+    )
+
+    memo = discord.ui.TextInput(
+        label="メモ",
+        placeholder="例: 実験1の考察まで",
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=300
+    )
+
+    def __init__(self, deadline_id, title, subject, due_at, memo):
+        super().__init__()
+        self.deadline_id = deadline_id
+        due_dt = datetime.fromisoformat(due_at)
+        self.task_title.default = title
+        self.due.default = format_dt(due_dt)
+        self.subject.default = subject or ""
+        self.memo.default = memo or ""
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            due_dt = parse_due(str(self.due))
+        except ValueError:
+            await interaction.response.send_message(
+                "期限は `2026-07-10 23:59` のように入力してください。",
+                ephemeral=True
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            rows = await db.execute_fetchall(
+                """
+                SELECT label
+                FROM deadline_notifications
+                WHERE deadline_id = ?
+                """,
+                (self.deadline_id,)
+            )
+            reminder_values = [
+                REMINDER_VALUES_BY_LABEL[label]
+                for (label,) in rows
+                if label in REMINDER_VALUES_BY_LABEL
+            ]
+
+            cursor = await db.execute(
+                """
+                UPDATE deadlines
+                SET title = ?, subject = ?, due_at = ?, memo = ?
+                WHERE id = ? AND guild_id = ? AND done = 0
+                """,
+                (
+                    str(self.task_title),
+                    str(self.subject),
+                    due_dt.isoformat(),
+                    str(self.memo),
+                    self.deadline_id,
+                    interaction.guild_id,
+                )
+            )
+
+            if cursor.rowcount == 0:
+                await interaction.response.send_message(
+                    f"`{self.deadline_id}` は見つからないか、完了済みです。",
+                    ephemeral=True
+                )
+                return
+
+            await replace_notifications(db, self.deadline_id, due_dt, reminder_values)
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"編集しました: **{str(self.task_title)}** / 期限: `{format_dt(due_dt)}`",
+            ephemeral=True
+        )
+
+
 class ReminderView(discord.ui.View):
     def __init__(self, data):
         super().__init__(timeout=300)
@@ -133,12 +267,14 @@ class ReminderView(discord.ui.View):
     @discord.ui.select(
         placeholder="通知タイミングを選ぶ",
         min_values=1,
-        max_values=4,
+        max_values=6,
         options=[
-            discord.SelectOption(label="1週間前", value="10080"),
-            discord.SelectOption(label="3日前", value="4320"),
-            discord.SelectOption(label="1日前", value="1440"),
-            discord.SelectOption(label="3時間前", value="180"),
+            discord.SelectOption(label=REMINDER_LABELS["40320"], value="40320"),
+            discord.SelectOption(label=REMINDER_LABELS["20160"], value="20160"),
+            discord.SelectOption(label=REMINDER_LABELS["10080"], value="10080"),
+            discord.SelectOption(label=REMINDER_LABELS["4320"], value="4320"),
+            discord.SelectOption(label=REMINDER_LABELS["1440"], value="1440"),
+            discord.SelectOption(label=REMINDER_LABELS["180"], value="180"),
         ]
     )
     async def select_reminders(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -159,14 +295,7 @@ class ReminderView(discord.ui.View):
             return
 
         due_dt = datetime.fromisoformat(self.data["due_at"])
-        labels = {
-            "10080": "1週間前",
-            "4320": "3日前",
-            "1440": "1日前",
-            "180": "3時間前",
-        }
-
-        selected_labels = [labels[value] for value in self.selected]
+        selected_labels = [REMINDER_LABELS[value] for value in self.selected]
 
         embed = discord.Embed(
             title="この内容で登録しますか？",
@@ -195,12 +324,6 @@ class FinalConfirmView(discord.ui.View):
     @discord.ui.button(label="登録する", style=discord.ButtonStyle.success)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         due_dt = datetime.fromisoformat(self.data["due_at"])
-        labels = {
-            "10080": "1週間前",
-            "4320": "3日前",
-            "1440": "1日前",
-            "180": "3時間前",
-        }
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -222,26 +345,10 @@ class FinalConfirmView(discord.ui.View):
 
             deadline_id = cursor.lastrowid
 
-            for value in self.data["reminders"]:
-                minutes = int(value)
-                notify_at = due_dt - timedelta(minutes=minutes)
-
-                await db.execute(
-                    """
-                    INSERT INTO deadline_notifications
-                    (deadline_id, label, notify_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        deadline_id,
-                        labels[value],
-                        notify_at.isoformat(),
-                    )
-                )
-
+            await replace_notifications(db, deadline_id, due_dt, self.data["reminders"])
             await db.commit()
 
-        selected_labels = [labels[value] for value in self.data["reminders"]]
+        selected_labels = [REMINDER_LABELS[value] for value in self.data["reminders"]]
         registered_embed = discord.Embed(
             title="課題・テストが登録されました",
             color=discord.Color.green()
@@ -299,6 +406,29 @@ async def list_deadlines(interaction: discord.Interaction):
         lines.append(f"`{row_id}` **{title}**{subject_text} - {format_dt(dt)}")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@tree.command(name="edit", description="課題・テストの内容を編集します")
+async def edit(interaction: discord.Interaction, id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT title, subject, due_at, memo
+            FROM deadlines
+            WHERE id = ? AND guild_id = ? AND done = 0
+            """,
+            (id, interaction.guild_id)
+        )
+        row = await cursor.fetchone()
+
+    if row is None:
+        await interaction.response.send_message(
+            f"`{id}` は見つからないか、完了済みです。",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_modal(EditDeadlineModal(id, *row))
 
 
 @tree.command(name="done", description="課題・テストを完了にします")
