@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: deadline-discord-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: DB_PATH
+        value: /var/data/deadlines.db
+    disk:
+      name: deadline-data
+      mountPath: /var/data
+      sizeGB: 1
