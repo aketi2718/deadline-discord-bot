@@ -195,6 +195,12 @@ class FinalConfirmView(discord.ui.View):
     @discord.ui.button(label="登録する", style=discord.ButtonStyle.success)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         due_dt = datetime.fromisoformat(self.data["due_at"])
+        labels = {
+            "10080": "1週間前",
+            "4320": "3日前",
+            "1440": "1日前",
+            "180": "3時間前",
+        }
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -216,13 +222,6 @@ class FinalConfirmView(discord.ui.View):
 
             deadline_id = cursor.lastrowid
 
-            labels = {
-                "10080": "1週間前",
-                "4320": "3日前",
-                "1440": "1日前",
-                "180": "3時間前",
-            }
-
             for value in self.data["reminders"]:
                 minutes = int(value)
                 notify_at = due_dt - timedelta(minutes=minutes)
@@ -241,6 +240,22 @@ class FinalConfirmView(discord.ui.View):
                 )
 
             await db.commit()
+
+        selected_labels = [labels[value] for value in self.data["reminders"]]
+        registered_embed = discord.Embed(
+            title="課題・テストが登録されました",
+            color=discord.Color.green()
+        )
+        registered_embed.add_field(name="課題", value=self.data["title"], inline=False)
+        registered_embed.add_field(name="科目", value=self.data["subject"] or "未設定", inline=False)
+        registered_embed.add_field(name="期限", value=format_dt(due_dt), inline=False)
+        registered_embed.add_field(name="通知", value="、".join(selected_labels), inline=False)
+        registered_embed.add_field(name="登録者", value=interaction.user.mention, inline=False)
+        if self.data["memo"]:
+            registered_embed.add_field(name="メモ", value=self.data["memo"], inline=False)
+
+        if interaction.channel:
+            await interaction.channel.send(embed=registered_embed)
 
         await interaction.response.send_message(
             f"登録しました: **{self.data['title']}** / 期限: `{format_dt(due_dt)}`",
