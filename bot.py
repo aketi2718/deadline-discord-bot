@@ -286,7 +286,10 @@ async def list_deadlines(interaction: discord.Interaction):
         )
 
     if not rows:
-        await interaction.response.send_message("登録されている課題・テストはありません。")
+        await interaction.response.send_message(
+            "登録されている課題・テストはありません。",
+            ephemeral=True,
+        )
         return
 
     lines = []
@@ -295,7 +298,7 @@ async def list_deadlines(interaction: discord.Interaction):
         subject_text = f" / {subject}" if subject else ""
         lines.append(f"`{row_id}` **{title}**{subject_text} - {format_dt(dt)}")
 
-    await interaction.response.send_message("\n".join(lines))
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @tree.command(name="done", description="課題・テストを完了にします")
