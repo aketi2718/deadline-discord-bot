@@ -123,6 +123,49 @@ DISCORD_TOKEN = Discord BotのToken
 `render.yaml` により、BotはBackground Workerとして起動します。
 SQLiteの保存先は `/var/data/deadlines.db` です。
 
+## 6. Oracle Cloud Always Freeで動かす
+
+Oracle Cloudの無料VMを使う場合は、UbuntuのVMを作ってSSH接続したあと、以下を実行します。
+
+```bash
+sudo apt update
+sudo apt install -y git
+git clone https://github.com/aketi2718/deadline-discord-bot.git
+cd deadline-discord-bot
+cp .env.example .env
+nano .env
+```
+
+`.env` にBot Tokenを入れます。
+
+```env
+DISCORD_TOKEN=Discord BotのToken
+```
+
+保存したら、セットアップします。
+
+```bash
+bash scripts/setup_oracle_ubuntu.sh
+```
+
+ログを見るには:
+
+```bash
+sudo journalctl -u deadline-discord-bot -f
+```
+
+止めるには:
+
+```bash
+sudo systemctl stop deadline-discord-bot
+```
+
+再起動するには:
+
+```bash
+sudo systemctl restart deadline-discord-bot
+```
+
 ## よくあるエラー
 
 ### `/add` が出てこない
